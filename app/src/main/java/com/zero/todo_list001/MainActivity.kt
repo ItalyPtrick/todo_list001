@@ -52,6 +52,13 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastForEachIndexed
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.zero.todo_list001.data.AppDatabase
+import com.zero.todo_list001.data.TaskEntity
+import com.zero.todo_list001.data.TaskRepository
+import com.zero.todo_list001.ui.TaskViewModel
+import com.zero.todo_list001.ui.TaskViewModelFactory
 import com.zero.todo_list001.ui.theme.Todo_list001Theme
 import com.zero.todo_list001.ui.util.px
 import com.zero.todo_list001.ui.util.textPx
@@ -65,7 +72,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             Todo_list001Theme {
-
+                val database = AppDatabase.getDatabase(applicationContext)
+                val repository = TaskRepository(database.taskDao())
+                val viewModelFactory = TaskViewModelFactory(repository)
+                
+                TodoListScreen(viewModel = viewModel(factory = viewModelFactory))
             }
         }
     }
@@ -74,7 +85,21 @@ class MainActivity : ComponentActivity() {
 
 @Preview(showBackground = true)
 @Composable
-fun TodoListScreen() {
+fun PreviewTodoListScreen() {
+    Todo_list001Theme {
+        val database = AppDatabase.getDatabase(androidx.compose.ui.platform.LocalContext.current)
+        val repository = TaskRepository(database.taskDao())
+        val viewModelFactory = TaskViewModelFactory(repository)
+        TodoListScreen(viewModel = viewModel(factory = viewModelFactory))
+    }
+}
+
+@Composable
+fun TodoListScreen(viewModel: TaskViewModel = viewModel()) {
+    val tasks by viewModel.tasks.collectAsStateWithLifecycle()
+    val selectedDate by viewModel.selectedDate.collectAsStateWithLifecycle()
+    val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -95,9 +120,9 @@ fun TodoListScreen() {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            DateRow()
-            CategoryRow()
-            TaskList()
+            DateRow(viewModel = viewModel, selectedDate = selectedDate)
+            CategoryRow(viewModel = viewModel, selectedCategory = selectedCategory)
+            TaskList(tasks = tasks)
         }
     }
 }
@@ -121,7 +146,7 @@ fun TodoListTopBar() {
         },
         title = {
             Text(
-                text = "Today’s Tasks",
+                text = "今日任务",
                 fontSize = 19.textPx(),
                 fontWeight = FontWeight.SemiBold
             )
@@ -140,26 +165,34 @@ data class DayInfo(
     val month: String,
     val dayOfMonth: String,
     val dayOfWeek: String,
-    val isToday: Boolean
+    val isToday: Boolean,
+    val localDate: LocalDate
 )
 
-val dayInfoList = buildList {
-    val today = LocalDate.now()
-    val local = Locale.getDefault()
-    for (i in -2..2) { // 前后共计五天
-        val day = today.plusDays(i.toLong())
-        val dayInfo = DayInfo(
-            month = day.month.getDisplayName(TextStyle.SHORT, local),
-            dayOfMonth = String.format(local, "%02d", day.dayOfMonth),
-            dayOfWeek = day.dayOfWeek.getDisplayName(TextStyle.SHORT, local),
-            isToday = day.equals(today)
-        )
-        add(dayInfo)
+val dayInfoList: List<DayInfo>
+    @Composable
+    get() = remember {
+        buildList {
+            val today = LocalDate.now()
+            val local = Locale.getDefault()
+            for (i in -2..2) {
+                val day = today.plusDays(i.toLong())
+                val dayInfo = DayInfo(
+                    month = day.month.getDisplayName(TextStyle.SHORT, local),
+                    dayOfMonth = String.format(local, "%02d", day.dayOfMonth),
+                    dayOfWeek = day.dayOfWeek.getDisplayName(TextStyle.SHORT, local),
+                    isToday = day.equals(today),
+                    localDate = day
+                )
+                add(dayInfo)
+            }
+        }
     }
-}
 
 @Composable
-fun DateRow() {
+fun DateRow(viewModel: TaskViewModel, selectedDate: Long) {
+    val dates = dayInfoList
+
     Row(
         modifier = Modifier
             .padding(top = 32.px())
@@ -168,14 +201,17 @@ fun DateRow() {
         horizontalArrangement = Arrangement.spacedBy(12.px()),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        dayInfoList.fastForEach { date ->
+        dates.fastForEach { date ->
             DateItem(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(15.px()))
                     .background(
-                        color = if (date.isToday) Color(0xFF5F33E1) else Color.White
+                        color = if (date.localDate.toEpochDay() == selectedDate) Color(0xFF5F33E1) else Color.White
                     )
+                    .clickable {
+                        viewModel.setSelectedDate(date.localDate)
+                    }
                     .padding(vertical = 8.px(), horizontal = 20.px()),
                 dayInfo = date
             )
@@ -246,11 +282,12 @@ val CustomShape = GenericShape { size, _ ->
 }
 
 @Composable
-fun CategoryRow() {
+fun CategoryRow(viewModel: TaskViewModel, selectedCategory: String) {
     val categories = remember {
         listOf("All", "To do", "In progress", "Completed")
     }
-    var currentIndex by remember { mutableIntStateOf(0) }
+    val currentIndex = categories.indexOf(selectedCategory)
+
     Row(
         modifier = Modifier
             .padding(top = 32.px())
@@ -261,7 +298,7 @@ fun CategoryRow() {
     ) {
         Spacer(Modifier.width(22.px()))
         categories.fastForEachIndexed { index, category ->
-            val isSelected = index == currentIndex
+            val isSelected = category == selectedCategory
             CategoryItem(
                 modifier = Modifier
                     .wrapContentWidth()
@@ -271,7 +308,7 @@ fun CategoryRow() {
                         color = if (isSelected) Color(0xFF5F33E1) else Color(0xFFEDE8FF)
                     )
                     .clickable {
-                        currentIndex = index
+                        viewModel.setSelectedCategory(category)
                     }
                     .padding(vertical = 8.px(), horizontal = 24.px()),
                 category = category,
@@ -300,47 +337,8 @@ fun CategoryItem(
     }
 }
 
-data class Task(
-    val title: String,
-    val category: String,
-    val status: String,
-    val date: String,
-    val icon: Int
-)
-
-val tasks = listOf(
-    Task(
-        "Market Research",
-        "Grocery shopping app design",
-        "Done",
-        "10:00 AM",
-        R.mipmap.briefcase
-    ),
-    Task(
-        "Competitive Analysis",
-        "Grocery shopping app design",
-        "In Progress",
-        "12:00 PM",
-        R.mipmap.briefcase
-    ),
-    Task(
-        "Create Low-fidelity Wireframe",
-        "Uber Eats redesign challange",
-        "To-do",
-        "07:00 PM",
-        R.mipmap.user
-    ),
-    Task(
-        "How to pitch a Design Sprint",
-        "About design sprint",
-        "To-do",
-        "09:00 PM",
-        R.mipmap.book
-    )
-)
-
 @Composable
-fun TaskList() {
+fun TaskList(tasks: List<TaskEntity>) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -348,15 +346,23 @@ fun TaskList() {
             .padding(top = 28.px()),
         verticalArrangement = Arrangement.spacedBy(16.px())
     ) {
-        tasks.fastForEach { task ->
-            TaskItem(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(15.px()))
-                    .background(Color.White)
-                    .padding(16.px()),
-                task = task
+        if (tasks.isEmpty()) {
+            Text(
+                text = "No tasks for this day/category.",
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 32.dp),
+                color = Color.Gray
             )
+        } else {
+            tasks.fastForEach { task ->
+                TaskItem(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(15.px()))
+                        .background(Color.White)
+                        .padding(16.px()),
+                    task = task
+                )
+            }
         }
     }
 }
@@ -364,7 +370,7 @@ fun TaskList() {
 @Composable
 fun TaskItem(
     modifier: Modifier = Modifier,
-    task: Task
+    task: TaskEntity
 ) {
     Column(
         modifier = modifier,
@@ -386,7 +392,7 @@ fun TaskItem(
                     .size(24.px())
                     .clip(RoundedCornerShape(7.px()))
                     .background(
-                        color = when (task.icon) {
+                        color = when (task.iconResId) {
                             R.mipmap.briefcase -> Color(0xFFFFE4F2)
                             R.mipmap.user -> Color(0xFFEDE4FF)
                             R.mipmap.book -> Color(0xFFFFE6D4)
@@ -396,7 +402,7 @@ fun TaskItem(
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    painter = painterResource(task.icon),
+                    painter = painterResource(task.iconResId),
                     contentDescription = null,
                     modifier = Modifier.size(14.px())
                 )
