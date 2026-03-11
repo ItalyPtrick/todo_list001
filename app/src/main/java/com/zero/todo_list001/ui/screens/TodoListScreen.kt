@@ -321,6 +321,11 @@ fun TodoListScreen(viewModel: TaskViewModel = viewModel()) {
                                 )
                             },
                             onEditTask = { editingTask = it },
+                            onStartTask = { task ->
+                                viewModel.updateTask(
+                                    task.copy(status = "In Progress")
+                                )
+                            },
                             onLongPressTask = { task ->
                                 if (!isSelectionMode) {
                                     isSelectionMode = true

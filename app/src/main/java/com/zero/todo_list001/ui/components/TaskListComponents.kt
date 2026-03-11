@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -57,6 +58,7 @@ fun AdaptiveTaskList(
     onDeleteTask: (TaskEntity) -> Unit,
     onToggleComplete: (TaskEntity) -> Unit,
     onEditTask: (TaskEntity) -> Unit,
+    onStartTask: (TaskEntity) -> Unit,
     onLongPressTask: (TaskEntity) -> Unit
 ) {
     val sortedTasks = remember(tasks) { tasks.sortedBy { it.date } }
@@ -91,6 +93,7 @@ fun AdaptiveTaskList(
                         isSelected = selectedTaskIds.contains(task.id),
                         onToggleComplete = { onToggleComplete(task) },
                         onEdit = { onEditTask(task) },
+                        onStartTask = { onStartTask(task) },
                         onLongClick = { onLongPressTask(task) },
                         onToggleSelection = { onToggleSelection(task.id) }
                     )
@@ -101,6 +104,7 @@ fun AdaptiveTaskList(
 }
 
 // ===================== 滑动任务 =====================
+private enum class RevealSide { NONE, EDIT, START }
 
 @Composable
 fun SwipeableTaskItem(
@@ -109,22 +113,49 @@ fun SwipeableTaskItem(
     isSelected: Boolean,
     onToggleComplete: () -> Unit,
     onEdit: () -> Unit,
+    onStartTask: () -> Unit,
     onLongClick: () -> Unit,
     onToggleSelection: () -> Unit
 ) {
     val density = LocalDensity.current
     var cardWidthPx by remember { mutableFloatStateOf(0f) }
-    var rawDragPx by remember { mutableFloatStateOf(0f) }
     var isPendingEdit by remember { mutableStateOf(false) }
-    val latestMaxRedPx = rememberUpdatedState(cardWidthPx * 0.25f)
-    var isValidDrag by remember { mutableStateOf(true) }
+    var isPendingStart by remember { mutableStateOf(false) }
+    val maxRevealPx = rememberUpdatedState(cardWidthPx * 0.25f)
+    val directionThresholdPx = with(density) { 8.dp.toPx() } // 方向判定阈值8dp
 
-    BackHandler(enabled = isPendingEdit) { isPendingEdit = false; rawDragPx = 0f }
+    // 新状态机变量
+    var revealSide by remember { mutableStateOf(RevealSide.NONE) }
+    var revealPx by remember { mutableFloatStateOf(0f) } // 始终 >= 0
+    var accumulatedDelta by remember { mutableFloatStateOf(0f) } // 仅用于NONE状态判定方向
 
-    val animatedEditWidthPx by animateFloatAsState(
-        targetValue = if (isPendingEdit) latestMaxRedPx.value else rawDragPx.coerceAtLeast(0f),
+    BackHandler(enabled = isPendingEdit || isPendingStart) {
+        isPendingEdit = false
+        isPendingStart = false
+        revealSide = RevealSide.NONE
+        revealPx = 0f
+        accumulatedDelta = 0f
+    }
+
+    // 两个动画宽度变量，严格互斥
+    val editZoneWidthPx by animateFloatAsState(
+        targetValue = when {
+            isPendingEdit -> maxRevealPx.value
+            revealSide == RevealSide.EDIT -> revealPx.coerceIn(0f, maxRevealPx.value)
+            else -> 0f
+        },
         animationSpec = spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMediumLow),
         label = "edit_zone"
+    )
+
+    val startZoneWidthPx by animateFloatAsState(
+        targetValue = when {
+            isPendingStart -> maxRevealPx.value
+            revealSide == RevealSide.START -> revealPx.coerceIn(0f, maxRevealPx.value)
+            else -> 0f
+        },
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMediumLow),
+        label = "start_zone"
     )
 
     Box(
@@ -132,25 +163,98 @@ fun SwipeableTaskItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(15.px()))
             .onSizeChanged { cardWidthPx = it.width.toFloat() }
-            .pointerInput(isPendingEdit, isSelectionMode) {
+            .pointerInput(isPendingEdit, isPendingStart, isSelectionMode) {
                 if (isSelectionMode) return@pointerInput
-                if (!isPendingEdit) {
+                if (!isPendingEdit && !isPendingStart) {
                     detectHorizontalDragGestures(
-                        onDragStart = { offset -> isValidDrag = offset.x > size.width * 0.25f },
-                        onDragEnd = {
-                            if (isValidDrag && rawDragPx > 30f) isPendingEdit =
-                                true else rawDragPx = 0f
+                        onDragStart = {
+                            revealSide = RevealSide.NONE
+                            revealPx = 0f
+                            accumulatedDelta = 0f
                         },
-                        onDragCancel = { if (isValidDrag) rawDragPx = 0f },
+                        onDragEnd = {
+                            val autoOpenThreshold = maxRevealPx.value / 3 // iOS风格自动展开阈值
+                            when (revealSide) {
+                                RevealSide.EDIT -> { // 右滑显示左侧编辑蓝区
+                                    if (revealPx > autoOpenThreshold) {
+                                        isPendingEdit = true
+                                    }
+                                }
+                                RevealSide.START -> { // 左滑显示右侧开始橙区
+                                    if (revealPx > autoOpenThreshold) {
+                                        isPendingStart = true
+                                    }
+                                }
+                                RevealSide.NONE -> {}
+                            }
+                            // 手指抬起重置所有滑动状态
+                            revealSide = RevealSide.NONE
+                            revealPx = 0f
+                            accumulatedDelta = 0f
+                        },
+                        onDragCancel = {
+                            revealSide = RevealSide.NONE
+                            revealPx = 0f
+                            accumulatedDelta = 0f
+                        },
                         onHorizontalDrag = { _, delta ->
-                            if (isValidDrag) rawDragPx =
-                                (rawDragPx - delta).coerceIn(0f, latestMaxRedPx.value)
+                            when (revealSide) {
+                                // 已锁定编辑模式（右滑，显示左侧蓝区）
+                                RevealSide.EDIT -> {
+                                    revealPx = if (delta > 0) {
+                                        // 继续右滑：增加显示宽度
+                                        (revealPx + delta).coerceAtMost(maxRevealPx.value)
+                                    } else {
+                                        // 向左回滑：减少显示宽度（收起）
+                                        (revealPx + delta).coerceAtLeast(0f)
+                                    }
+                                }
+                                // 已锁定开始模式（左滑，显示右侧橙区）
+                                RevealSide.START -> {
+                                    revealPx = if (delta < 0) {
+                                        // 继续左滑：增加显示宽度
+                                        (revealPx - delta).coerceAtMost(maxRevealPx.value)
+                                    } else {
+                                        // 向右回滑：减少显示宽度（收起）
+                                        (revealPx - delta).coerceAtLeast(0f)
+                                    }
+                                }
+                                // 未锁定，累计偏移判定方向
+                                RevealSide.NONE -> {
+                                    accumulatedDelta += delta
+                                    when {
+                                        // 累计右滑超过阈值，锁定编辑方向
+                                        accumulatedDelta > directionThresholdPx -> {
+                                            revealSide = RevealSide.EDIT
+                                            revealPx = accumulatedDelta.coerceIn(0f, maxRevealPx.value)
+                                            accumulatedDelta = 0f // 锁定后清零累计值
+                                        }
+                                        // 累计左滑超过阈值，锁定开始方向
+                                        accumulatedDelta < -directionThresholdPx -> {
+                                            revealSide = RevealSide.START
+                                            revealPx = (-accumulatedDelta).coerceIn(0f, maxRevealPx.value)
+                                            accumulatedDelta = 0f // 锁定后清零累计值
+                                        }
+                                        // 未超过阈值，继续累计
+                                        else -> {
+                                            // 不做操作，继续累计delta
+                                        }
+                                    }
+                                }
+                            }
                         }
                     )
                 } else {
                     detectHorizontalDragGestures { _, delta ->
-                        if (delta > 20f) {
-                            isPendingEdit = false; rawDragPx = 0f
+                        when {
+                            // 编辑状态下向左滑动取消
+                            isPendingEdit && delta < -20f -> {
+                                isPendingEdit = false
+                            }
+                            // 开始状态下向右滑动取消
+                            isPendingStart && delta > 20f -> {
+                                isPendingStart = false
+                            }
                         }
                     }
                 }
@@ -159,34 +263,60 @@ fun SwipeableTaskItem(
         val noOp: () -> Unit = {}
         AnimatedTaskItem(
             task = task, isSelectionMode = isSelectionMode, isSelected = isSelected,
-            onToggleComplete = if (!isPendingEdit) onToggleComplete else noOp,
-            onLongClick = if (!isPendingEdit) onLongClick else noOp,
+            onToggleComplete = if (!isPendingEdit && !isPendingStart) onToggleComplete else noOp,
+            onLongClick = if (!isPendingEdit && !isPendingStart) onLongClick else noOp,
             onToggleSelection = onToggleSelection
         )
 
-        // 编辑蓝区
-        if (animatedEditWidthPx > 0f) {
+        // 编辑蓝区（左侧）
+        if (editZoneWidthPx > 0f) {
+            Box(modifier = Modifier.matchParentSize()) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxHeight()
+                        .width(with(density) { editZoneWidthPx.toDp() })
+                        .then(if (isPendingEdit) Modifier.clickable {
+                            isPendingEdit = false; onEdit()
+                        } else Modifier)
+                        .background(Color(0xFF4FC3F7)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val iconAlpha = (editZoneWidthPx / maxRevealPx.value).coerceIn(0f, 1f)
+                    Icon(
+                        Icons.Default.Edit,
+                        "编辑",
+                        tint = Color.White,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .graphicsLayer(alpha = iconAlpha)
+                    )
+                }
+            }
+        }
+
+        // 进行中橙区（右侧）
+        if (startZoneWidthPx > 0f) {
             Box(modifier = Modifier.matchParentSize()) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .fillMaxHeight()
-                        .width(with(density) { animatedEditWidthPx.toDp() })
-                        .then(if (isPendingEdit) Modifier.clickable {
-                            isPendingEdit = false; rawDragPx = 0f; onEdit()
+                        .width(with(density) { startZoneWidthPx.toDp() })
+                        .then(if (isPendingStart) Modifier.clickable {
+                            isPendingStart = false; onStartTask()
                         } else Modifier)
-                        .background(
-                            if (isPendingEdit) Color(0xFF4FC3F7) else Color(0xFF4FC3F7).copy(
-                                alpha = 0.75f
-                            )
-                        ),
+                        .background(Color(0xFFFF7D53)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isPendingEdit) Icon(
-                        Icons.Default.Edit,
-                        "编辑",
+                    val iconAlpha = (startZoneWidthPx / maxRevealPx.value).coerceIn(0f, 1f)
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        "开始任务",
                         tint = Color.White,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier
+                            .size(20.dp)
+                            .graphicsLayer(alpha = iconAlpha)
                     )
                 }
             }
@@ -259,20 +389,18 @@ fun AnimatedTaskItem(
         verticalAlignment = Alignment.CenterVertically
     ) {
 
-        AnimatedVisibility(
-            visible = isSelectionMode,
-            enter = expandHorizontally(
-                expandFrom = Alignment.Start,
-                animationSpec = tween(350, easing = FastOutSlowInEasing)
-            ) + fadeIn(tween(350)),
-            exit = shrinkHorizontally(
-                shrinkTowards = Alignment.Start,
-                animationSpec = tween(350, easing = FastOutSlowInEasing)
-            ) + fadeOut(tween(350))
+        // 多选模式勾选框 - 使用固定宽度避免布局测量开销
+        Box(
+            modifier = Modifier
+                .width(if (isSelectionMode) 36.dp else 0.dp)
+                .animateContentSize(
+                    animationSpec = tween(350, easing = FastOutSlowInEasing),
+                    finishedListener = { _, _ -> }
+                ),
+            contentAlignment = Alignment.CenterStart
         ) {
-            Box(modifier = Modifier.width(36.dp), contentAlignment = Alignment.CenterStart) {
-
-                // --- 【高级感升级 3】勾选框Q弹切换：加入物理弹簧模型 ---
+            if (isSelectionMode) {
+                // 勾选框Q弹切换：加入物理弹簧模型
                 AnimatedContent(
                     targetState = isSelected,
                     transitionSpec = {
