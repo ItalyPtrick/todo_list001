@@ -30,8 +30,8 @@ private val TechColdBlueScheme = darkColorScheme(
 
 @Composable
 fun Todo_list001Theme(
-    darkTheme: Boolean = true,     // 默认深色，科技感
-    dynamicColor: Boolean = true,  // Android 12+ 莫奈取色
+    darkTheme: Boolean = true,
+    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

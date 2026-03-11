@@ -6,7 +6,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -42,7 +41,6 @@ import com.zero.todo_list001.ui.components.AdaptiveTaskList
 import com.zero.todo_list001.ui.components.*
 import com.zero.todo_list001.ui.dialog.TaskBottomSheet
 import com.zero.todo_list001.ui.components.CategoryRow
-import com.zero.todo_list001.ui.components.YearMonthPickerDialog
 
 @Preview(showBackground = true)
 @Composable

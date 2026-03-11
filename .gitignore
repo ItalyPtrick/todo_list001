@@ -13,3 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+/.serena/.gitignore
+/.serena/project.yml
